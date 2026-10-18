@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Open Music"
+description = "A free music discovery and listening app built around authorized, openly licensed music sources. Search and play public-domain and Creative Commons audio, then keep playlists, favorites, queue, and listening history locally without accounts or paid music APIs."
+version = "1.0.0"
+id = "artifacts/open-music"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20457
+
+[services.development]
+run = "pnpm --filter @workspace/open-music run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/open-music", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/open-music/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20457"
+BASE_PATH = "/"

@@ -1,19 +1,24 @@
-# [Project name]
+# Open Music
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Open Music helps listeners discover and play public-domain and openly licensed recordings, with playlists and favorites saved in the browser.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/open-music run dev` — run the music app
+- `pnpm --filter @workspace/open-music run typecheck` — check the music app
+- `pnpm --filter @workspace/open-music run build` — build the static music app
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Open Music needs no database, account, API key, or secret. The separate shared API server uses `DATABASE_URL`; it is not required by this app.
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
+- App: React, Vite, TypeScript, Tailwind CSS, Wouter, Lucide
+- Music search: public Internet Archive and Openverse APIs; HTML5 Audio for direct streams
+- Local persistence: browser `localStorage`
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
 - Validation: Zod (`zod/v4`), `drizzle-zod`
@@ -22,23 +27,30 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/open-music/src/App.tsx` — application shell, routes, player, playlists, and local library
+- `artifacts/open-music/src/lib/source.ts` — modular source adapters, license checks, and paged catalog search
+- `artifacts/open-music/src/index.css` — app theme and responsive styles
+- `artifacts/open-music/README.md` — source, attribution, rate-limit, and catalog limitations
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Keep music playback and personal library data in the browser; no backend or account is needed.
+- Only play direct audio URLs with an explicit eligible license. Exclude NonCommercial terms because commercial-use status is not established.
+- Search both Openverse and Internet Archive; show the provider, license, creator credit, and source record for each result.
+- Never imply access to protected commercial streaming catalogs or fill discovery sections with invented tracks.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Listeners can discover, search, and play eligible open recordings; manage favorites, playlists, queue, and listening history; and choose dark or light mode.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Dark theme by default with a light-mode option, responsive navigation, and a persistent player.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Openverse anonymous search is rate-limited. Cache searches and surface rate-limit/provider failures; do not make its requests on every keystroke.
+- Regional-language coverage depends on provider metadata and licensing; do not infer or fabricate language tags.
 
 ## Pointers
 

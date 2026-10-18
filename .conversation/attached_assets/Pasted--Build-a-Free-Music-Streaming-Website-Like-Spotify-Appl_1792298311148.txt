@@ -1,0 +1,119 @@
+# Build a Free Music Streaming Website Like Spotify, Apple Music, and YouTube Music
+
+Build a modern, fully responsive music streaming website inspired by Spotify, Apple Music, and YouTube Music. The goal is to create a platform where users can discover, search, and listen to music for free without subscriptions, paid APIs, or mandatory user accounts.
+
+## Core Requirements
+
+### 1. Music Library and Discovery
+- Provide access to the largest possible music catalog through legitimate, free-to-use music sources.
+- Support music discovery across Telugu, Hindi, Tamil, Kannada, Malayalam, English, and other languages.
+- Include movie soundtracks, independent artists, albums, singles, devotional music, classical music, instrumental tracks, remixes, and trending songs.
+- Organize music by artist, album, genre, language, release year, and popularity.
+- Display song covers, artist names, album details, and release information.
+- Include trending songs, new releases, popular playlists, recommendations, and recently played tracks.
+- Make the catalog searchable by song name, artist, album, movie, and lyrics when available.
+
+### 2. Free Music Sources — No Paid APIs
+Design the application to work without paid music APIs or subscriptions.
+
+Explore legitimate free sources and integrations, including:
+- YouTube Data API alternatives that do not require an API key, where permitted by their terms.
+- Official YouTube embeds or supported playback methods.
+- Internet Archive audio collections and other openly licensed music catalogs.
+- Jamendo or other free music providers, if their free access terms permit the intended use.
+- Public-domain music, Creative Commons music, and independent artists who permit streaming.
+- Direct audio URLs from sources that explicitly authorize streaming.
+
+Create a modular music-provider architecture so new sources can be added easily without rewriting the entire application.
+
+**Important:** Do not scrape protected platforms, bypass DRM, circumvent subscription restrictions, or download copyrighted music without permission. Do not claim that the application can legally stream every song from Spotify, Apple Music, or YouTube Music. Instead, maximize coverage through authorized sources and official playback integrations.
+
+### 3. Advanced Music Player
+Create a polished, persistent music player with:
+- Play, pause, next, and previous controls.
+- Seek bar with current playback time and total duration.
+- Volume control and mute.
+- Shuffle and repeat modes.
+- Queue management and upcoming songs.
+- Mini-player and expanded player views.
+- Album artwork, song title, and artist information.
+- Background playback where supported by the browser and source.
+- Keyboard shortcuts.
+- Responsive playback controls on mobile and desktop.
+- Clear error handling when a source is unavailable or playback is restricted.
+
+Music should continue playing while users navigate between pages within the application.
+
+### 4. Spotify-Style User Interface
+Build an attractive, premium-looking interface with:
+- Dark theme by default, with optional light mode.
+- Left sidebar for Home, Search, Library, Playlists, and Favorites.
+- Large featured playlists and album artwork.
+- Horizontally scrollable music cards.
+- A persistent bottom playback bar.
+- Smooth animations, hover effects, transitions, and skeleton loading states.
+- Mobile navigation and touch-friendly controls.
+- A clean layout inspired by modern music streaming applications without copying their logos or proprietary assets.
+
+### 5. Search and Recommendations
+- Implement fast search with debouncing and relevant results.
+- Add filters for language, artist, album, genre, and music source.
+- Show suggestions as the user types.
+- Recommend songs based on listening history, favorite artists, genres, and playlists.
+- Support similar-song discovery and related artists whenever source metadata allows it.
+- Display useful empty states and alternative results when a song cannot be played.
+
+### 6. Personal Music Library
+Allow users to:
+- Create, rename, and delete playlists.
+- Add and remove songs from playlists.
+- Like and save songs.
+- View recently played music.
+- Maintain a playback queue.
+- Save preferences and playlists locally without requiring an account.
+- Optionally synchronize data through a free, self-hostable backend if needed.
+
+### 7. Technical Stack
+Use the following stack unless the existing project already uses a suitable alternative:
+- Next.js with TypeScript.
+- Tailwind CSS.
+- shadcn/ui for reusable interface components.
+- Lucide icons.
+- HTML5 Audio for authorized direct audio sources.
+- IndexedDB or localStorage for local playlists and preferences.
+- Free hosting options such as Cloudflare Pages or an appropriate free deployment platform.
+
+Avoid paid databases, paid hosting requirements, and paid API dependencies. Clearly identify any external service that requires registration or imposes usage limits.
+
+### 8. Performance and Reliability
+- Use lazy loading for album artwork.
+- Cache metadata where permitted.
+- Avoid loading every song into memory at once.
+- Add pagination or infinite scrolling for large catalogs.
+- Handle unavailable tracks, broken URLs, network errors, and unsupported formats.
+- Prevent duplicate search requests.
+- Keep the music player responsive on low-end devices and slower connections.
+- Never store private API keys in frontend code.
+
+### 9. Development and Implementation
+Before coding, inspect the existing repository and preserve its current structure where possible.
+
+Build the application in phases:
+1. Create the complete responsive interface.
+2. Implement the persistent music player.
+3. Integrate authorized, free music sources.
+4. Build search and music discovery.
+5. Add playlists, favorites, queue, and listening history.
+6. Implement error handling, caching, and performance optimizations.
+7. Test the entire application on mobile and desktop.
+8. Document deployment instructions and all source limitations.
+
+Do not create a UI filled with fake songs or nonfunctional buttons. Clearly distinguish demo content from real playable music. Every implemented feature must work, and all unavailable integrations must be documented honestly.
+
+## Final Objective
+
+Deliver a production-quality, free music streaming website that feels as polished and easy to use as Spotify, Apple Music, or YouTube Music, while relying on legitimate free music sources and avoiding paid API subscriptions.
+
+Prioritize the largest legally accessible music catalog, fast discovery, reliable playback, excellent design, and zero mandatory subscription costs.
+
+**Be transparent about the main limitation:** there is no guaranteed free, unrestricted API or legal method that provides the complete copyrighted catalogs of Spotify, Apple Music, and YouTube Music in one application. Design the best possible alternative around authorized music sources and official playback options.

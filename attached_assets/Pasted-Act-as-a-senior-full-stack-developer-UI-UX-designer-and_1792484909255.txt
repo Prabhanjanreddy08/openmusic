@@ -1,0 +1,132 @@
+Act as a senior full-stack developer, UI/UX designer, and music streaming platform architect.
+Build a fully functional, modern music streaming web application inspired by Spotify, Apple Music, and YouTube Music. The application must prioritize an ad-free listening experience, zero mandatory user subscription fees, a massive searchable music catalog, and a premium user interface.
+Create a website where users can discover, search, organize, and listen to music without advertisements inserted by my application and without requiring a paid subscription.
+I want the catalog to cover as many songs, albums, artists, remixes, regional tracks, and international music releases as legally accessible sources permit, including Telugu, Hindi, Tamil, Kannada, Malayalam, English, Korean, Japanese, and other languages.
+Use these sources appropriately:
+- YouTube Data API v3: Search for songs, music videos, artists/channels, thumbnails, and video IDs.
+- YouTube IFrame Player API: Play supported YouTube content using the official embedded player.
+- Internet Archive or other open music catalogs: Integrate eligible recordings where licensing and streaming permissions allow it.
+- Jamendo or similar licensed music services: Integrate only when their current API access and license terms permit the intended use.
+- Design a provider architecture so additional authorized music sources can be added later.
+Requirements:
+- Do not require Spotify Premium, Apple Music, YouTube Music Premium, or paid music APIs to get started.
+- Keep API keys in Replit Secrets or environment variables.
+- Provide a clear setup guide for each API.
+- Handle API quota limits, errors, empty results, and rate limiting.
+- Cache permitted search metadata where the provider's policies allow it.
+- Never scrape YouTube, bypass its advertisements, extract unauthorized audio streams, or download copyrighted music without permission.
+- Do not falsely promise that every YouTube song can play as audio-only content.
+My own website must contain:
+- No banner advertisements.
+- No pop-up advertisements.
+- No autoplay advertisements inserted by my application.
+- No sponsored song placements.
+- No advertising SDKs or ad networks.
+- No forced subscription screen.
+- No payment requirement for the app's own core listening features.
+Important: Explain in the documentation that third-party playback providers may display their own advertisements or impose playback restrictions. Do not bypass those restrictions. Where permitted, prioritize licensed, ad-free audio sources.
+Create a responsive, polished dark interface.
+- Left sidebar with Home, Search, Explore, Library, Liked Songs, Playlists, and Recently Played.
+- Main content area with featured music, recently played tracks, albums, genres, and recommendations.
+- Persistent bottom music player.
+- Search bar with instant results and loading states.
+- Queue panel and expandable Now Playing view.
+- Responsive navigation with Home, Search, Library, and Player.
+- Mobile-friendly playback controls.
+- Mini-player above the bottom navigation.
+- Full-screen Now Playing page.
+- Smooth transitions and touch-friendly interactions.
+Use a near-black background, subtle gradients, elegant typography, rounded album artwork, tasteful accent colors, skeleton loading states, and smooth hover effects. Avoid copying Spotify's branding, logo, or proprietary assets.
+Implement:
+- Play and pause.
+- Next and previous track.
+- Seek bar and elapsed/total duration where supported.
+- Volume control where supported.
+- Shuffle and repeat.
+- Play queue.
+- Add to queue.
+- Recently played.
+- Like and unlike songs.
+- Album and artist information.
+- Playback error and unavailable-track handling.
+- Keyboard shortcuts.
+- Persistent mini-player during navigation.
+Use a provider-specific playback adapter. Do not display fake playback progress or claim that a song is playing when its source has failed.
+Create a unified search experience for:
+- Song titles.
+- Artists and bands.
+- Albums.
+- Music videos.
+- Genres and languages.
+- Playlists.
+- Regional and international music.
+Search requirements:
+- Debounced search input.
+- Paginated or incremental results where supported.
+- Loading, empty, error, and retry states.
+- Search suggestions based on permitted metadata.
+- Deduplication of matching results where possible.
+- Filters for source, language, genre, and content type when metadata is available.
+- Dynamic discovery instead of attempting to download an entire external music catalog.
+Never invent song metadata or fabricate playable tracks when a provider returns no results.
+Users should be able to:
+- Create, rename, and delete playlists.
+- Add or remove songs from playlists.
+- Like songs and albums.
+- View listening history.
+- Resume recently played music where supported.
+- Reorder tracks in a playlist.
+- Search their personal library.
+Use a database to store user-created playlists and favorites. Store external provider IDs and only the metadata that the relevant provider permits you to retain.
+- Frontend: Next.js with TypeScript.
+- Styling: Tailwind CSS and shadcn/ui.
+- Icons: Lucide.
+- Animations: Framer Motion where useful.
+- Music discovery: YouTube Data API v3 and authorized alternative catalogs.
+- Playback: YouTube IFrame Player API and provider-specific authorized audio players.
+- Backend: Next.js server routes or a suitable backend service.
+- Database: PostgreSQL or Supabase.
+- Deployment: Replit deployment with environment variables and documented configuration.
+Choose compatible, currently supported package versions and keep the architecture maintainable.
+Organize the code into reusable modules:
+- components/ — sidebar, navigation, song cards, album cards, player, queue, search, and playlist UI.
+- lib/music/providers/ — provider adapters for discovery and playback.
+- lib/music/search/ — unified search, deduplication, and provider result mapping.
+- lib/music/player/ — playback state, queue, and player controls.
+- app/api/ — server-side search and other authorized provider operations.
+- lib/db/ — database access and persistence.
+- types/ — shared TypeScript interfaces.
+- docs/ — API setup, licensing assumptions, deployment, and troubleshooting.
+Separate discovery from playback. A searchable result is not necessarily a playable track.
+- Lazy-load album artwork.
+- Use pagination and debounced search.
+- Cache only content permitted by the source provider.
+- Avoid excessive API calls.
+- Handle network failures and unavailable tracks gracefully.
+- Make the player persist across internal page navigation.
+- Keep the website responsive on mobile and desktop.
+- Include proper accessibility labels and keyboard navigation.
+Build the actual working application, not just a design mockup.
+First, inspect the existing Replit project and preserve useful working code. Then:
+1. Set up the application structure and design system.
+2. Build the complete responsive interface.
+3. Implement real search integration with the configured provider.
+4. Implement supported playback through the official player or authorized audio sources.
+5. Build the music library and playlist functionality.
+6. Add persistent state and database integration where required.
+7. Add error handling, loading states, and empty states.
+8. Test the major user journeys and fix runtime, TypeScript, and build errors.
+9. Provide a README with environment variables, API setup, deployment steps, and known limitations.
+If API credentials are missing, show a useful setup screen and keep the rest of the application functional. Never substitute fake API responses in production.
+The completed application must:
+- Start and run successfully in Replit.
+- Have a polished, responsive Spotify-inspired interface.
+- Search a real external music catalog when credentials are configured.
+- Play content through the appropriate supported playback mechanism.
+- Provide functional search, queue, playback controls, likes, and playlists.
+- Have no advertisements inserted by my application.
+- Have no mandatory subscription for the application's own core features.
+- Require no paid API subscription to begin testing with eligible free-tier access.
+- Clearly distinguish playable audio from video-based or unavailable results.
+- Respect copyright, provider terms, and playback restrictions.
+Start implementing the project now. Prioritize a working end-to-end music search and playback flow before adding advanced features.

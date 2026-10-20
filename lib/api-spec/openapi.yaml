@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: youtube
+    description: YouTube discovery
 paths:
   /healthz:
     get:
@@ -24,6 +26,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /youtube/search:
+    get:
+      operationId: searchYouTube
+      tags: [youtube]
+      summary: Search YouTube videos
+      description: Searches embeddable YouTube videos using the configured server-side API key.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 120
+        - name: pageToken
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+        - name: language
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[a-z]{2}$"
+      responses:
+        "200":
+          description: A page of embeddable YouTube video results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/YoutubeSearchResponse"
+        "400":
+          description: Invalid search parameters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: The YouTube API quota is exhausted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: YouTube search is not configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: The YouTube API could not complete the search.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +92,46 @@ components:
           type: string
       required:
         - status
+    YoutubeVideoResult:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        channel:
+          type: string
+        description:
+          type: string
+        thumbnailUrl:
+          type: string
+          format: uri
+        sourceUrl:
+          type: string
+          format: uri
+      required:
+        - id
+        - title
+        - channel
+        - description
+        - thumbnailUrl
+        - sourceUrl
+    YoutubeSearchResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/YoutubeVideoResult"
+        nextPageToken:
+          type: string
+      required:
+        - items
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
 

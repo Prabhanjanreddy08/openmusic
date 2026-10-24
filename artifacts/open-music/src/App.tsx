@@ -61,7 +61,7 @@ type MusicContextType = LocalState & {
 };
 const MusicContext = createContext<MusicContextType | null>(null);
 const STORAGE_KEY = 'open-music-state-v1';
-const SILENT_AUDIO_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+const SILENT_AUDIO_URI = '/silence.wav';
 const DEFAULT_STATE: LocalState = { favorites: [], playlists: [], recent: [], queue: [], theme: 'dark', volume: 0.72, muted: false, shuffle: false, repeat: 'off', tracks: {} };
 const queryClient = new QueryClient();
 
@@ -83,10 +83,11 @@ function MusicProvider({ children }: { children: ReactNode }) {
   const [expanded, setExpanded] = useState(false);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
   const silentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const userPausedRef = useRef(false);
   const ytPlayerRef = useRef<any>(null);
   const pendingVideoRef = useRef<string | null>(null);
-  const latest = useRef({ local, current, playing });
-  latest.current = { local, current, playing };
+  const latest = useRef({ local, current, playing, userPaused: false });
+  latest.current = { local, current, playing, userPaused: userPausedRef.current };
 
   const patch = useCallback((update: Partial<LocalState> | ((old: LocalState) => Partial<LocalState>)) => {
     setLocal((old) => ({ ...old, ...(typeof update === 'function' ? update(old) : update) }));
@@ -154,11 +155,27 @@ function MusicProvider({ children }: { children: ReactNode }) {
           },
           onStateChange: (event: any) => {
             if (event.data === 1) {
+              userPausedRef.current = false;
               setPlaying(true);
               const dur = event.target.getDuration();
               if (dur > 0) setDuration(dur);
             } else if (event.data === 2) {
-              setPlaying(false);
+              if (userPausedRef.current) {
+                setPlaying(false);
+              } else {
+                // Background/lock-screen auto-pause triggered by mobile browser!
+                // Keep playing and resume audio immediately like Spotify!
+                if (silentAudioRef.current && silentAudioRef.current.paused) {
+                  silentAudioRef.current.play().catch(() => {});
+                }
+                setTimeout(() => {
+                  if (!userPausedRef.current && ytPlayerRef.current?.playVideo) {
+                    try {
+                      ytPlayerRef.current.playVideo();
+                    } catch {}
+                  }
+                }, 50);
+              }
             } else if (event.data === 0) {
               const { local: snapshot, current: track } = latest.current;
               if (snapshot.repeat === 'one' && track) {
@@ -253,6 +270,7 @@ function MusicProvider({ children }: { children: ReactNode }) {
 
   const playTrack = useCallback((track: Track, items?: Track[]) => {
     cacheTracks([track, ...(items || [])]);
+    userPausedRef.current = false;
     setCurrent(track);
     setCurrentTime(0);
     setPlaybackError('');
@@ -298,6 +316,7 @@ function MusicProvider({ children }: { children: ReactNode }) {
   }, [audio, cacheTracks, patch]);
 
   const next = useCallback(() => {
+    userPausedRef.current = false;
     const { local: state, current: now } = latest.current;
     if (!state.queue.length) return;
     const index = state.queue.findIndex((track) => track.id === now?.id);
@@ -318,6 +337,7 @@ function MusicProvider({ children }: { children: ReactNode }) {
   nextRef.current = next;
 
   const previous = useCallback(() => {
+    userPausedRef.current = false;
     const isYT = current?.source === 'YouTube' || current?.id?.startsWith('yt:');
     if (isYT && ytPlayerRef.current?.getCurrentTime && ytPlayerRef.current.getCurrentTime() > 3) {
       ytPlayerRef.current.seekTo(0, true);
@@ -340,24 +360,24 @@ function MusicProvider({ children }: { children: ReactNode }) {
       return;
     }
     const isYT = current.source === 'YouTube' || current.id.startsWith('yt:');
-    if (silentAudioRef.current) {
-      if (playing) {
-        silentAudioRef.current.pause();
-      } else {
-        silentAudioRef.current.play().catch(() => {});
-      }
-    }
-    if (isYT && ytPlayerRef.current) {
-      if (playing) {
+    if (playing) {
+      userPausedRef.current = true;
+      if (silentAudioRef.current) silentAudioRef.current.pause();
+      if (isYT && ytPlayerRef.current) {
         ytPlayerRef.current.pauseVideo();
-        setPlaying(false);
-      } else {
-        ytPlayerRef.current.playVideo();
-        setPlaying(true);
+      } else if (audio) {
+        audio.pause();
       }
-    } else if (audio) {
-      if (audio.paused) void audio.play().catch(() => setPlaying(false));
-      else audio.pause();
+      setPlaying(false);
+    } else {
+      userPausedRef.current = false;
+      if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
+      if (isYT && ytPlayerRef.current) {
+        ytPlayerRef.current.playVideo();
+      } else if (audio) {
+        void audio.play().catch(() => setPlaying(false));
+      }
+      setPlaying(true);
     }
   }, [audio, current, playing, local.queue, local.recent, playTrack]);
 
@@ -457,14 +477,32 @@ function MusicProvider({ children }: { children: ReactNode }) {
     if (!('mediaSession' in navigator)) return;
 
     const actionHandlers: [MediaSessionAction, MediaSessionActionHandler][] = [
-      ['play', () => togglePlay()],
-      ['pause', () => togglePlay()],
-      ['previoustrack', () => previous()],
-      ['nexttrack', () => next()],
+      ['play', () => {
+        userPausedRef.current = false;
+        if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
+        if (ytPlayerRef.current?.playVideo) ytPlayerRef.current.playVideo();
+        if (audio && audio.paused) void audio.play().catch(() => {});
+        setPlaying(true);
+      }],
+      ['pause', () => {
+        userPausedRef.current = true;
+        if (silentAudioRef.current) silentAudioRef.current.pause();
+        if (ytPlayerRef.current?.pauseVideo) ytPlayerRef.current.pauseVideo();
+        if (audio && !audio.paused) audio.pause();
+        setPlaying(false);
+      }],
+      ['previoustrack', () => { userPausedRef.current = false; previous(); }],
+      ['nexttrack', () => { userPausedRef.current = false; next(); }],
       ['seekto', (details) => { if (typeof details.seekTime === 'number') seek(details.seekTime); }],
       ['seekbackward', (details) => { seek(Math.max(currentTime - (details.seekOffset || 10), 0)); }],
       ['seekforward', (details) => { seek(Math.min(currentTime + (details.seekOffset || 10), duration)); }],
-      ['stop', () => togglePlay()],
+      ['stop', () => {
+        userPausedRef.current = true;
+        if (silentAudioRef.current) silentAudioRef.current.pause();
+        if (ytPlayerRef.current?.pauseVideo) ytPlayerRef.current.pauseVideo();
+        if (audio) audio.pause();
+        setPlaying(false);
+      }],
     ];
 
     actionHandlers.forEach(([action, handler]) => {
@@ -499,15 +537,17 @@ function MusicProvider({ children }: { children: ReactNode }) {
   // Mobile App Switch / Background Visibility Guard
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.visibilityState === 'hidden' && latest.current.playing) {
+      if (document.visibilityState === 'hidden' && !userPausedRef.current && latest.current.current) {
         if (silentAudioRef.current && silentAudioRef.current.paused) {
           silentAudioRef.current.play().catch(() => {});
         }
-        if (ytPlayerRef.current?.playVideo) {
-          try {
-            ytPlayerRef.current.playVideo();
-          } catch {}
-        }
+        setTimeout(() => {
+          if (!userPausedRef.current && ytPlayerRef.current?.playVideo) {
+            try {
+              ytPlayerRef.current.playVideo();
+            } catch {}
+          }
+        }, 80);
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
@@ -562,7 +602,7 @@ function AppShell() {
       <div id="youtube-player-element" />
     </div>
     <audio ref={(node) => { if (node && music.audio !== node) music.setAudio(node); }} preload="metadata" data-testid="audio-element" />
-    <audio ref={music.silentAudioRef} src={SILENT_AUDIO_URI} loop preload="auto" />
+    <audio ref={music.silentAudioRef} src={SILENT_AUDIO_URI} loop preload="auto" playsInline />
     <aside className="sidebar">
       <Link href="/" className="brand" data-testid="link-brand"><span className="brand-mark"><AudioLines size={20} /></span><span>open<span className="brand-light">music</span></span></Link>
       <div className="side-caption">YOUR SPACE</div>

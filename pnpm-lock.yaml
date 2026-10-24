@@ -151,6 +151,9 @@ importers:
 
   .:
     dependencies:
+      '@distube/ytdl-core':
+        specifier: ^5.0.1
+        version: 5.0.1
       '@replit/connectors-sdk':
         specifier: ^0.4.3
         version: 0.4.3

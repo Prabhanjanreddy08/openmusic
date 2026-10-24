@@ -11,6 +11,7 @@
   },
   "private": true,
   "dependencies": {
+    "@distube/ytdl-core": "^5.0.1",
     "@replit/connectors-sdk": "^0.4.3"
   },
   "devDependencies": {

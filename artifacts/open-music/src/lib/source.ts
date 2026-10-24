@@ -237,7 +237,7 @@ export async function searchOpenverse(query: string, signal?: AbortSignal, page 
 
 const youtubeCache = new Map<string, CacheEntry>();
 
-function getApiBaseUrl(): string {
+export function getApiBaseUrl(): string {
   const envUrl = import.meta.env.VITE_API_URL;
   if (envUrl) return envUrl.replace(/\/$/, '');
   if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
@@ -308,7 +308,7 @@ export async function searchYouTubeTracks(
       language: filters.language || '',
       genre: filters.genre || 'Music',
       artworkUrl: video.thumbnailUrl,
-      audioUrl: sourceUrl,
+      audioUrl: `${apiBase}/api/youtube/stream?id=${encodeURIComponent(video.id)}`,
       licenseName: '',
       licenseUrl: '',
       sourceUrl,

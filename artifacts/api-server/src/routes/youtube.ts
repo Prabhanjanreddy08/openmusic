@@ -1,10 +1,21 @@
 import { Router, type IRouter } from "express";
 import { type ErrorResponse, SearchYouTubeQueryParams, SearchYouTubeResponse } from "@workspace/api-zod";
+import { Ytdl } from "@distube/ytdl-core";
+import { Readable } from "node:stream";
 
 const router: IRouter = Router();
 const CACHE_TTL = 5 * 60_000;
 const CACHE_LIMIT = 120;
 const responseCache = new Map<string, { createdAt: number; data: ReturnType<typeof SearchYouTubeResponse.parse> }>();
+
+const ytdl = new Ytdl();
+interface CachedAudioStream {
+  url: string;
+  mimeType: string;
+  contentLength?: number;
+  expiresAt: number;
+}
+const streamUrlCache = new Map<string, CachedAudioStream>();
 
 function errorBody(error: string): ErrorResponse {
   return { error };
@@ -149,6 +160,128 @@ router.get("/youtube/search", async (req, res): Promise<void> => {
     req.log.warn({ err }, "YouTube web search scraper failed");
     res.status(502).json(errorBody("Could not reach YouTube. Check your connection and try again."));
     return;
+  }
+});
+
+router.get("/youtube/stream", async (req, res): Promise<void> => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id || !/^[\w-]{6,16}$/.test(id)) {
+    res.status(400).json(errorBody("A valid YouTube video ID is required."));
+    return;
+  }
+
+  try {
+    let cached = streamUrlCache.get(id);
+    if (!cached || Date.now() > cached.expiresAt) {
+      const info = await ytdl.getInfo(id);
+      const audioFormats = info.formats.filter((f) => f.hasAudio && !f.hasVideo && f.url);
+      if (!audioFormats.length) {
+        res.status(404).json(errorBody("No direct audio format found for this video."));
+        return;
+      }
+
+      // Prioritize AAC / mp4 (itag 140 or similar) for full iOS Safari and Android Chrome compatibility
+      const mp4Audio = audioFormats
+        .filter((f) => f.container === "mp4" || f.mimeType?.includes("audio/mp4"))
+        .sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
+
+      const best = mp4Audio || audioFormats.sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
+      if (!best || !best.url) {
+        res.status(404).json(errorBody("No direct audio format found for this video."));
+        return;
+      }
+
+      const streamItem: CachedAudioStream = {
+        url: best.url,
+        mimeType: best.mimeType || "audio/mp4",
+        contentLength: best.contentLength ? Number(best.contentLength) : undefined,
+        expiresAt: Date.now() + 2 * 3600_000,
+      };
+      cached = streamItem;
+      streamUrlCache.set(id, streamItem);
+      if (streamUrlCache.size > 200) {
+        const oldest = streamUrlCache.keys().next().value;
+        if (oldest) streamUrlCache.delete(oldest);
+      }
+    }
+
+    if (!cached) {
+      res.status(404).json(errorBody("Audio stream not available."));
+      return;
+    }
+
+    // Forward range requests
+    const range = req.headers.range;
+    const upstreamHeaders: Record<string, string> = {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    };
+    if (range) {
+      upstreamHeaders["Range"] = range;
+    }
+
+    let upstream = await fetch(cached.url, {
+      headers: upstreamHeaders,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    // If cached URL expired (403 / 410), refresh cache once
+    if (upstream.status === 403 || upstream.status === 410) {
+      streamUrlCache.delete(id);
+      const freshInfo = await ytdl.getInfo(id);
+      const freshAudioFormats = freshInfo.formats.filter((f) => f.hasAudio && !f.hasVideo && f.url);
+      const freshMp4 = freshAudioFormats
+        .filter((f) => f.container === "mp4" || f.mimeType?.includes("audio/mp4"))
+        .sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
+      const freshBest = freshMp4 || freshAudioFormats.sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
+
+      if (!freshBest || !freshBest.url) {
+        res.status(404).json(errorBody("No direct audio format found for this video."));
+        return;
+      }
+
+      const freshStreamItem: CachedAudioStream = {
+        url: freshBest.url,
+        mimeType: freshBest.mimeType || "audio/mp4",
+        contentLength: freshBest.contentLength ? Number(freshBest.contentLength) : undefined,
+        expiresAt: Date.now() + 2 * 3600_000,
+      };
+      cached = freshStreamItem;
+      streamUrlCache.set(id, freshStreamItem);
+
+      upstream = await fetch(cached.url, {
+        headers: upstreamHeaders,
+        signal: AbortSignal.timeout(30_000),
+      });
+    }
+
+    res.status(upstream.status);
+    res.setHeader("Content-Type", upstream.headers.get("content-type") || cached.mimeType || "audio/mp4");
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+
+    const contentRange = upstream.headers.get("content-range");
+    if (contentRange) res.setHeader("Content-Range", contentRange);
+
+    const contentLength = upstream.headers.get("content-length");
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+
+    if (req.method === "HEAD" || !upstream.body) {
+      res.end();
+      return;
+    }
+
+    const nodeStream = Readable.fromWeb(upstream.body as any);
+    nodeStream.pipe(res);
+
+    req.on("close", () => {
+      nodeStream.destroy();
+    });
+  } catch (err: any) {
+    req.log?.warn?.({ err, videoId: id }, "Failed to stream YouTube audio");
+    res.status(502).json(errorBody(err?.message || "Could not stream audio from YouTube."));
   }
 });
 

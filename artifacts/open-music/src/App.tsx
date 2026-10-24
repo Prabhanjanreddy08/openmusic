@@ -10,7 +10,7 @@ import {
   VolumeX, X, Shuffle, Repeat, Repeat1, ChevronDown, ExternalLink, Clock3, Trash2,
   ListPlus, ArrowLeft, Check, AlertCircle, Headphones,
 } from 'lucide-react';
-import { emptyFilters, searchMusic, SearchProviderError, type SearchFilters, type Track } from '@/lib/source';
+import { emptyFilters, searchMusic, SearchProviderError, getApiBaseUrl, type SearchFilters, type Track } from '@/lib/source';
 import '@/index.css';
 
 type Playlist = { id: string; name: string; description: string; trackIds: string[]; createdAt: string };
@@ -243,8 +243,26 @@ function MusicProvider({ children }: { children: ReactNode }) {
       else setPlaying(false);
     };
     const onError = () => {
+      const currentTrack = latest.current.current;
+      const isYT = currentTrack?.source === 'YouTube' || currentTrack?.id.startsWith('yt:');
+      if (isYT && currentTrack) {
+        const videoId = currentTrack.providerId || currentTrack.id.replace(/^yt:/, '');
+        if (ytPlayerRef.current?.loadVideoById) {
+          try {
+            ytPlayerRef.current.loadVideoById(videoId);
+            ytPlayerRef.current.playVideo();
+            setPlaying(true);
+            return;
+          } catch {}
+        }
+      }
       setPlaying(false);
-      setPlaybackError('This source could not play the track. The file may be unavailable or unsupported by this browser. Try another recording.');
+      setPlaybackError('Playback could not start. Skipping to next track...');
+      setTimeout(() => {
+        if (latest.current.local.queue.length > 1) {
+          nextRef.current();
+        }
+      }, 1500);
     };
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('durationchange', onDuration);
@@ -276,37 +294,40 @@ function MusicProvider({ children }: { children: ReactNode }) {
     setPlaybackError('');
 
     const isYT = track.source === 'YouTube' || track.id.startsWith('yt:');
-    if (silentAudioRef.current) {
+    const videoId = track.providerId || track.id.replace(/^yt:/, '');
+    const apiBase = getApiBaseUrl();
+    const streamUrl = isYT
+      ? (track.audioUrl && track.audioUrl.includes('/api/youtube/stream')
+          ? track.audioUrl
+          : `${apiBase}/api/youtube/stream?id=${encodeURIComponent(videoId)}`)
+      : track.audioUrl;
+
+    if (silentAudioRef.current && silentAudioRef.current.paused) {
       silentAudioRef.current.play().catch(() => {});
     }
-    if (isYT) {
-      if (audio) {
-        audio.pause();
-        audio.currentTime = 0;
-      }
-      const videoId = track.providerId || track.id.replace(/^yt:/, '');
-      if (ytPlayerRef.current?.loadVideoById) {
-        ytPlayerRef.current.loadVideoById(videoId);
-        ytPlayerRef.current.playVideo();
-        setPlaying(true);
-      } else {
-        pendingVideoRef.current = videoId;
-        setPlaying(true);
-      }
-    } else {
+
+    if (audio) {
       if (ytPlayerRef.current?.pauseVideo) {
-        ytPlayerRef.current.pauseVideo();
+        try { ytPlayerRef.current.pauseVideo(); } catch {}
       }
-      if (audio) {
-        audio.src = track.audioUrl;
-        audio.load();
-        void audio.play().catch((error: unknown) => {
-          setPlaying(false);
-          if (!(error instanceof DOMException && error.name === 'AbortError')) {
-            setPlaybackError('Playback could not start. The source may be restricted or unavailable; try another recording.');
-          }
-        });
-      }
+      audio.src = streamUrl;
+      audio.load();
+      void audio.play().then(() => {
+        setPlaying(true);
+      }).catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        // Fallback to IFrame player if direct stream fails
+        if (isYT && ytPlayerRef.current?.loadVideoById) {
+          try {
+            ytPlayerRef.current.loadVideoById(videoId);
+            ytPlayerRef.current.playVideo();
+            setPlaying(true);
+            return;
+          } catch {}
+        }
+        setPlaying(false);
+        setPlaybackError('Playback could not start. Try another recording.');
+      });
     }
 
     patch((old) => {
@@ -329,7 +350,9 @@ function MusicProvider({ children }: { children: ReactNode }) {
     if (nextIndex >= 0) playTrack(state.queue[nextIndex], state.queue);
     else {
       if (audio) { audio.pause(); audio.currentTime = 0; }
-      if (ytPlayerRef.current?.pauseVideo) ytPlayerRef.current.pauseVideo();
+      if (ytPlayerRef.current?.pauseVideo) {
+        try { ytPlayerRef.current.pauseVideo(); } catch {}
+      }
       setPlaying(false);
     }
   }, [audio, playTrack]);
@@ -338,18 +361,20 @@ function MusicProvider({ children }: { children: ReactNode }) {
 
   const previous = useCallback(() => {
     userPausedRef.current = false;
+    if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
     const isYT = current?.source === 'YouTube' || current?.id?.startsWith('yt:');
     if (isYT && ytPlayerRef.current?.getCurrentTime && ytPlayerRef.current.getCurrentTime() > 3) {
-      ytPlayerRef.current.seekTo(0, true);
+      try { ytPlayerRef.current.seekTo(0, true); } catch {}
       return;
     }
-    if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
     const { local: state, current: now } = latest.current;
     const index = state.queue.findIndex((track) => track.id === now?.id);
     if (index > 0) playTrack(state.queue[index - 1], state.queue);
     else {
-      if (isYT && ytPlayerRef.current?.seekTo) ytPlayerRef.current.seekTo(0, true);
-      else if (audio) audio.currentTime = 0;
+      if (audio) audio.currentTime = 0;
+      if (isYT && ytPlayerRef.current?.seekTo) {
+        try { ytPlayerRef.current.seekTo(0, true); } catch {}
+      }
     }
   }, [audio, current, playTrack]);
 
@@ -363,32 +388,35 @@ function MusicProvider({ children }: { children: ReactNode }) {
     if (playing) {
       userPausedRef.current = true;
       if (silentAudioRef.current) silentAudioRef.current.pause();
-      if (isYT && ytPlayerRef.current) {
-        ytPlayerRef.current.pauseVideo();
-      } else if (audio) {
-        audio.pause();
+      if (audio) audio.pause();
+      if (isYT && ytPlayerRef.current?.pauseVideo) {
+        try { ytPlayerRef.current.pauseVideo(); } catch {}
       }
       setPlaying(false);
     } else {
       userPausedRef.current = false;
       if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
-      if (isYT && ytPlayerRef.current) {
-        ytPlayerRef.current.playVideo();
-      } else if (audio) {
-        void audio.play().catch(() => setPlaying(false));
+      if (audio && audio.src) {
+        void audio.play().then(() => setPlaying(true)).catch(() => {
+          if (isYT && ytPlayerRef.current?.playVideo) {
+            try { ytPlayerRef.current.playVideo(); setPlaying(true); } catch {}
+          }
+        });
+      } else if (isYT && ytPlayerRef.current?.playVideo) {
+        try { ytPlayerRef.current.playVideo(); setPlaying(true); } catch {}
       }
-      setPlaying(true);
     }
   }, [audio, current, playing, local.queue, local.recent, playTrack]);
 
   const seek = useCallback((value: number) => {
     if (!Number.isFinite(value)) return;
     setCurrentTime(value);
+    if (audio) {
+      try { audio.currentTime = value; } catch {}
+    }
     const isYT = current?.source === 'YouTube' || current?.id?.startsWith('yt:');
     if (isYT && ytPlayerRef.current?.seekTo) {
-      ytPlayerRef.current.seekTo(value, true);
-    } else if (audio) {
-      audio.currentTime = value;
+      try { ytPlayerRef.current.seekTo(value, true); } catch {}
     }
   }, [audio, current]);
 
@@ -469,8 +497,16 @@ function MusicProvider({ children }: { children: ReactNode }) {
       });
 
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+
+      if ('setPositionState' in navigator.mediaSession && Number.isFinite(duration) && duration > 0) {
+        navigator.mediaSession.setPositionState({
+          duration: Math.max(duration, 0),
+          playbackRate: 1,
+          position: Math.max(0, Math.min(currentTime, duration)),
+        });
+      }
     } catch {}
-  }, [current, playing]);
+  }, [current, playing, currentTime, duration]);
 
   // MediaSession Action Handlers (Bluetooth, Earbuds, Lock Screen buttons)
   useEffect(() => {
@@ -601,7 +637,7 @@ function AppShell() {
     <div style={{ position: 'fixed', top: 0, left: 0, width: 200, height: 200, opacity: 0.001, pointerEvents: 'none', zIndex: -9999, transform: 'translate3d(0, 0, 0)' }}>
       <div id="youtube-player-element" />
     </div>
-    <audio ref={(node) => { if (node && music.audio !== node) music.setAudio(node); }} preload="metadata" data-testid="audio-element" />
+    <audio ref={(node) => { if (node && music.audio !== node) music.setAudio(node); }} preload="auto" playsInline data-testid="audio-element" />
     <audio ref={music.silentAudioRef} src={SILENT_AUDIO_URI} loop preload="auto" playsInline />
     <aside className="sidebar">
       <Link href="/" className="brand" data-testid="link-brand"><span className="brand-mark"><AudioLines size={20} /></span><span>open<span className="brand-light">music</span></span></Link>

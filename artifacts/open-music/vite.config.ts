@@ -1,30 +1,53 @@
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
+import { searchYouTube } from './src/lib/youtube';
 
-const rawPort = process.env.PORT;
-
-if (!rawPort) {
-  throw new Error(
-    'PORT environment variable is required but was not provided.',
-  );
-}
-
+const rawPort = process.env.PORT || '5173';
 const port = Number(rawPort);
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const basePath = process.env.BASE_PATH;
+const basePath = process.env.BASE_PATH || '/';
 
-if (!basePath) {
-  throw new Error(
-    'BASE_PATH environment variable is required but was not provided.',
-  );
+function youtubeApiPlugin(): Plugin {
+  return {
+    name: 'youtube-api-plugin',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (!req.url?.startsWith('/api/youtube/search')) {
+          return next();
+        }
+        try {
+          const url = new URL(req.url, 'http://localhost');
+          const q = url.searchParams.get('q') || '';
+          const language = url.searchParams.get('language') || undefined;
+          const pageToken = url.searchParams.get('pageToken') || undefined;
+
+          if (!q.trim()) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'Search query is required' }));
+            return;
+          }
+
+          const result = await searchYouTube(q, { language, pageToken });
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        } catch (error: any) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: error.message || 'YouTube search failed' }));
+        }
+      });
+    },
+  };
 }
 
 export default defineConfig({
@@ -32,6 +55,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    youtubeApiPlugin(),
     runtimeErrorOverlay(),
     ...(process.env.NODE_ENV !== 'production' &&
     process.env.REPL_ID !== undefined

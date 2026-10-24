@@ -80,6 +80,8 @@ function MusicProvider({ children }: { children: ReactNode }) {
   const muted = local.muted;
   const [expanded, setExpanded] = useState(false);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
+  const ytPlayerRef = useRef<any>(null);
+  const pendingVideoRef = useRef<string | null>(null);
   const latest = useRef({ local, current });
   latest.current = { local, current };
 
@@ -90,6 +92,122 @@ function MusicProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(local));
     document.documentElement.classList.toggle('dark', local.theme === 'dark');
   }, [local]);
+
+  // Initialize YouTube IFrame API
+  useEffect(() => {
+    let active = true;
+
+    const loadApi = (): Promise<any> => {
+      if ((window as any).YT?.Player) return Promise.resolve((window as any).YT);
+      return new Promise((resolve) => {
+        const prev = (window as any).onYouTubeIframeAPIReady;
+        (window as any).onYouTubeIframeAPIReady = () => {
+          prev?.();
+          resolve((window as any).YT);
+        };
+        if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+          const script = document.createElement('script');
+          script.src = 'https://www.youtube.com/iframe_api';
+          script.async = true;
+          document.head.appendChild(script);
+        }
+        const check = setInterval(() => {
+          if ((window as any).YT?.Player) {
+            clearInterval(check);
+            resolve((window as any).YT);
+          }
+        }, 200);
+      });
+    };
+
+    loadApi().then((YT) => {
+      if (!active) return;
+      const target = document.getElementById('youtube-player-element');
+      if (!target) return;
+
+      ytPlayerRef.current = new YT.Player('youtube-player-element', {
+        height: '100',
+        width: '100',
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          modestbranding: 1,
+          rel: 0,
+          playsinline: 1,
+          origin: window.location.origin,
+        },
+        events: {
+          onReady: (event: any) => {
+            event.target.setVolume(local.volume * 100);
+            if (local.muted) event.target.mute();
+            if (pendingVideoRef.current) {
+              const vid = pendingVideoRef.current;
+              pendingVideoRef.current = null;
+              event.target.loadVideoById(vid);
+              event.target.playVideo();
+            }
+          },
+          onStateChange: (event: any) => {
+            if (event.data === 1) {
+              setPlaying(true);
+              const dur = event.target.getDuration();
+              if (dur > 0) setDuration(dur);
+            } else if (event.data === 2) {
+              setPlaying(false);
+            } else if (event.data === 0) {
+              const { local: snapshot, current: track } = latest.current;
+              if (snapshot.repeat === 'one' && track) {
+                event.target.seekTo(0);
+                event.target.playVideo();
+              } else if (snapshot.repeat === 'all' || snapshot.queue.length > 1) {
+                nextRef.current();
+              } else {
+                setPlaying(false);
+              }
+            }
+          },
+          onError: () => {
+            setPlaying(false);
+            setPlaybackError('This track could not be played. Skipping to next track...');
+            setTimeout(() => {
+              if (latest.current.local.queue.length > 1) {
+                nextRef.current();
+              }
+            }, 1500);
+          },
+        },
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Poll YouTube player time
+  useEffect(() => {
+    if (!playing) return;
+    const isYT = current?.source === 'YouTube' || current?.id?.startsWith('yt:');
+    if (!isYT) return;
+    const timer = setInterval(() => {
+      if (ytPlayerRef.current?.getCurrentTime) {
+        try {
+          const time = ytPlayerRef.current.getCurrentTime();
+          if (typeof time === 'number' && Number.isFinite(time)) {
+            setCurrentTime(time);
+          }
+          const dur = ytPlayerRef.current.getDuration();
+          if (typeof dur === 'number' && Number.isFinite(dur) && dur > 0) {
+            setDuration(dur);
+          }
+        } catch {}
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, [playing, current]);
+
   useEffect(() => {
     if (!audio) return;
     audio.volume = local.volume;
@@ -106,7 +224,7 @@ function MusicProvider({ children }: { children: ReactNode }) {
     };
     const onError = () => {
       setPlaying(false);
-      setPlaybackError('This source could not play the track. The file may be unavailable or unsupported by this browser. Try the source record or another recording.');
+      setPlaybackError('This source could not play the track. The file may be unavailable or unsupported by this browser. Try another recording.');
     };
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('durationchange', onDuration);
@@ -129,26 +247,50 @@ function MusicProvider({ children }: { children: ReactNode }) {
     tracks.forEach((track) => { nextTracks[track.id] = track; });
     return { tracks: nextTracks };
   }), [patch]);
+
   const playTrack = useCallback((track: Track, items?: Track[]) => {
     cacheTracks([track, ...(items || [])]);
     setCurrent(track);
     setCurrentTime(0);
     setPlaybackError('');
-    if (audio) {
-      audio.src = track.audioUrl;
-      audio.load();
-      void audio.play().catch((error: unknown) => {
-        setPlaying(false);
-        if (!(error instanceof DOMException && error.name === 'AbortError')) {
-          setPlaybackError('Playback could not start. The source may be restricted or unavailable; try the source record or another recording.');
-        }
-      });
+
+    const isYT = track.source === 'YouTube' || track.id.startsWith('yt:');
+    if (isYT) {
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+      const videoId = track.providerId || track.id.replace(/^yt:/, '');
+      if (ytPlayerRef.current?.loadVideoById) {
+        ytPlayerRef.current.loadVideoById(videoId);
+        ytPlayerRef.current.playVideo();
+        setPlaying(true);
+      } else {
+        pendingVideoRef.current = videoId;
+        setPlaying(true);
+      }
+    } else {
+      if (ytPlayerRef.current?.pauseVideo) {
+        ytPlayerRef.current.pauseVideo();
+      }
+      if (audio) {
+        audio.src = track.audioUrl;
+        audio.load();
+        void audio.play().catch((error: unknown) => {
+          setPlaying(false);
+          if (!(error instanceof DOMException && error.name === 'AbortError')) {
+            setPlaybackError('Playback could not start. The source may be restricted or unavailable; try another recording.');
+          }
+        });
+      }
     }
+
     patch((old) => {
       const queue = items?.length ? items : [track];
       return { queue, recent: [track, ...old.recent.filter((item) => item.id !== track.id)].slice(0, 100) };
     });
   }, [audio, cacheTracks, patch]);
+
   const next = useCallback(() => {
     const { local: state, current: now } = latest.current;
     if (!state.queue.length) return;
@@ -162,38 +304,84 @@ function MusicProvider({ children }: { children: ReactNode }) {
     if (nextIndex >= 0) playTrack(state.queue[nextIndex], state.queue);
     else {
       if (audio) { audio.pause(); audio.currentTime = 0; }
+      if (ytPlayerRef.current?.pauseVideo) ytPlayerRef.current.pauseVideo();
       setPlaying(false);
     }
   }, [audio, playTrack]);
   const nextRef = useRef(next);
   nextRef.current = next;
+
   const previous = useCallback(() => {
+    const isYT = current?.source === 'YouTube' || current?.id?.startsWith('yt:');
+    if (isYT && ytPlayerRef.current?.getCurrentTime && ytPlayerRef.current.getCurrentTime() > 3) {
+      ytPlayerRef.current.seekTo(0, true);
+      return;
+    }
     if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
     const { local: state, current: now } = latest.current;
     const index = state.queue.findIndex((track) => track.id === now?.id);
     if (index > 0) playTrack(state.queue[index - 1], state.queue);
-    else if (audio) audio.currentTime = 0;
-  }, [audio, playTrack]);
+    else {
+      if (isYT && ytPlayerRef.current?.seekTo) ytPlayerRef.current.seekTo(0, true);
+      else if (audio) audio.currentTime = 0;
+    }
+  }, [audio, current, playTrack]);
+
   const togglePlay = useCallback(() => {
-    if (!audio) return;
     if (!current) {
       const track = local.queue[0] || local.recent[0];
       if (track) playTrack(track, local.queue.length ? local.queue : [track]);
-    } else if (audio.paused) void audio.play().catch(() => setPlaying(false));
-    else audio.pause();
-  }, [audio, current, local.queue, local.recent, playTrack]);
-  const seek = useCallback((value: number) => { if (audio && Number.isFinite(value)) audio.currentTime = value; }, [audio]);
+      return;
+    }
+    const isYT = current.source === 'YouTube' || current.id.startsWith('yt:');
+    if (isYT && ytPlayerRef.current) {
+      if (playing) {
+        ytPlayerRef.current.pauseVideo();
+        setPlaying(false);
+      } else {
+        ytPlayerRef.current.playVideo();
+        setPlaying(true);
+      }
+    } else if (audio) {
+      if (audio.paused) void audio.play().catch(() => setPlaying(false));
+      else audio.pause();
+    }
+  }, [audio, current, playing, local.queue, local.recent, playTrack]);
+
+  const seek = useCallback((value: number) => {
+    if (!Number.isFinite(value)) return;
+    setCurrentTime(value);
+    const isYT = current?.source === 'YouTube' || current?.id?.startsWith('yt:');
+    if (isYT && ytPlayerRef.current?.seekTo) {
+      ytPlayerRef.current.seekTo(value, true);
+    } else if (audio) {
+      audio.currentTime = value;
+    }
+  }, [audio, current]);
+
   const setVolume = useCallback((value: number) => {
     const safe = Math.max(0, Math.min(1, value));
+    if (ytPlayerRef.current?.setVolume) {
+      ytPlayerRef.current.setVolume(safe * 100);
+    }
     if (audio) audio.volume = safe;
     patch({ volume: safe, ...(safe > 0 ? { muted: false } : {}) });
-    if (safe > 0 && audio) audio.muted = false;
+    if (safe > 0) {
+      if (ytPlayerRef.current?.unMute) ytPlayerRef.current.unMute();
+      if (audio) audio.muted = false;
+    }
   }, [audio, patch]);
+
   const toggleMute = useCallback(() => {
     const nextMuted = !latest.current.local.muted;
+    if (ytPlayerRef.current) {
+      if (nextMuted) ytPlayerRef.current.mute();
+      else ytPlayerRef.current.unMute();
+    }
     if (audio) audio.muted = nextMuted;
     patch({ muted: nextMuted });
   }, [audio, patch]);
+
   const toggleShuffle = useCallback(() => patch((old) => ({ shuffle: !old.shuffle })), [patch]);
   const toggleRepeat = useCallback(() => patch((old) => ({ repeat: old.repeat === 'off' ? 'all' : old.repeat === 'all' ? 'one' : 'off' })), [patch]);
   const toggleFavorite = useCallback((track: Track) => {
@@ -260,6 +448,9 @@ function AppShell() {
     return () => window.removeEventListener('keydown', shortcut);
   }, [music.togglePlay, music.next, music.previous, music.toggleMute, music.seek, music.duration, music.currentTime]);
   return <div className="shell grain">
+    <div style={{ position: 'fixed', bottom: -300, left: -300, width: 150, height: 150, opacity: 0.001, pointerEvents: 'none', zIndex: -9999 }}>
+      <div id="youtube-player-element" />
+    </div>
     <audio ref={(node) => { if (node && music.audio !== node) music.setAudio(node); }} preload="metadata" data-testid="audio-element" />
     <aside className="sidebar">
       <Link href="/" className="brand" data-testid="link-brand"><span className="brand-mark"><AudioLines size={20} /></span><span>open<span className="brand-light">music</span></span></Link>
@@ -371,41 +562,45 @@ function useSourceTracks(query: string, filters: SearchFilters, enabled = true) 
 
 function DiscoverPage() {
   const music = useMusic();
-  const latest = useSourceTracks('', { ...emptyFilters, source: 'Internet Archive', sort: 'date desc' });
-  const popular = useSourceTracks('', { ...emptyFilters, source: 'Internet Archive', sort: 'downloads desc' });
+  const latest = useSourceTracks('', { ...emptyFilters, source: 'YouTube', sort: 'date desc' });
+  const popular = useSourceTracks('', { ...emptyFilters, source: 'YouTube', sort: 'downloads desc' });
   const recent = music.recent;
   const favoriteTrack = music.favorites.map((id) => music.tracks[id]).find(Boolean);
   const recommendationSeed = recent[0] || favoriteTrack;
   const recommendationQuery = recommendationSeed?.genre.split(',')[0]?.trim() || recommendationSeed?.artist || '';
-  const recommendation = useSourceTracks(recommendationQuery, emptyFilters, Boolean(recommendationQuery));
+  const recommendation = useSourceTracks(recommendationQuery ? `${recommendationQuery} songs` : '', emptyFilters, Boolean(recommendationQuery));
   const recommendationTracks = recommendation.tracks.filter((track) =>
     !recent.some((item) => item.id === track.id) && !music.favorites.includes(track.id),
   );
   const [filter, setFilter] = useState('All sounds');
   const filterMap: Record<string, SearchFilters> = {
-    'All sounds': emptyFilters, 'South Asian': { ...emptyFilters, language: 'Hindi, Bengali, Tamil, Urdu, Punjabi, Sinhala, Nepali' },
-    Instrumental: { ...emptyFilters, genre: 'instrumental' }, 'Field recordings': { ...emptyFilters, genre: 'field recording' },
+    'All sounds': emptyFilters,
+    'South Asian': { ...emptyFilters, language: 'Hindi Bollywood Punjabi' },
+    'Instrumental': { ...emptyFilters, genre: 'lofi instrumental chill' },
+    'Global Pop': { ...emptyFilters, genre: 'pop billboard hits' },
+    'Rock Classics': { ...emptyFilters, genre: 'rock classics' },
+    'Hip-Hop & R&B': { ...emptyFilters, genre: 'hip hop r&b' },
   };
   const discovery = useSourceTracks('', filterMap[filter]);
   return <div className="page-wrap">
-    <div className="topline"><span className="topline-copy"><span className="live-dot" /> Independent sound, openly shared</span><Link href="/search" className="top-search" data-testid="link-top-search"><Search size={17} /> Find a sound <span className="mono">/</span></Link></div>
-    <section className="welcome-block fade-up"><div className="welcome-copy"><p className="eyebrow">A listening room without borders</p><h1 className="serif">Hear what<br /><em>belongs to all.</em></h1><p className="welcome-description">A small, growing collection of music you can listen to freely — from independent artists, open archives and the public domain.</p><div className="welcome-meta"><span className="open-circle"><Check size={13} /></span><span>Every play is source-backed and license-checked.</span></div></div><div className="welcome-art" aria-hidden="true"><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" /><div className="art-center"><Disc3 size={85} strokeWidth={0.8} /></div><span className="art-label">OPEN<br />SOUNDS</span><span className="art-number">01 — 26</span></div></section>
-    <div className="catalog-note"><span className="note-glyph">i</span><p>This authorized catalog is smaller than commercial streaming services, and some regional languages may have fewer recordings. We only play items with an explicit public-domain or Creative Commons license.</p></div>
-    <section className="section-block"><div className="section-heading"><div><div className="eyebrow">Across open sources</div><h2 className="serif">A first listen</h2></div><Link href="/search" className="section-link" data-testid="link-browse-search">Browse the catalog <span>↗</span></Link></div>
+    <div className="topline"><span className="topline-copy"><span className="live-dot" /> Any song on YouTube, freely playable</span><Link href="/search" className="top-search" data-testid="link-top-search"><Search size={17} /> Find a sound <span className="mono">/</span></Link></div>
+    <section className="welcome-block fade-up"><div className="welcome-copy"><p className="eyebrow">A listening room without borders</p><h1 className="serif">Hear what<br /><em>belongs to all.</em></h1><p className="welcome-description">Search and stream any song, artist, album, or music video across YouTube's vast global catalog.</p><div className="welcome-meta"><span className="open-circle"><Check size={13} /></span><span>Every song is powered by YouTube's high quality audio stream.</span></div></div><div className="welcome-art" aria-hidden="true"><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" /><div className="art-center"><Disc3 size={85} strokeWidth={0.8} /></div><span className="art-label">OPEN<br />SOUNDS</span><span className="art-number">01 — 26</span></div></section>
+    <div className="catalog-note"><span className="note-glyph">i</span><p>Listen to any song on YouTube with background audio, custom playlists, queue, and local favorites saved on your device.</p></div>
+    <section className="section-block"><div className="section-heading"><div><div className="eyebrow">Trending on YouTube</div><h2 className="serif">A first listen</h2></div><Link href="/search" className="section-link" data-testid="link-browse-search">Browse the catalog <span>↗</span></Link></div>
       <div className="filter-pills" role="tablist" aria-label="Discovery filters">{Object.keys(filterMap).map((item) => <button role="tab" aria-selected={filter === item} key={item} className={`pill ${filter === item ? 'selected' : ''}`} onClick={() => setFilter(item)} data-testid={`filter-${item.toLowerCase().replaceAll(' ', '-')}`}>{item}</button>)}</div>
       <TrackSection result={discovery} title="Source results" />
     </section>
-    <section className="section-block popular-block"><div className="section-heading"><div><div className="eyebrow">Recently added</div><h2 className="serif">New to this room</h2></div><span className="section-caption">Internet Archive · newest records</span></div><TrackSection result={latest} compact /></section>
-    <section className="section-block popular-block"><div className="section-heading"><div><div className="eyebrow">Source activity</div><h2 className="serif">Most downloaded</h2></div><span className="section-caption">Internet Archive · source download sort</span></div><TrackSection result={popular} compact /></section>
+    <section className="section-block popular-block"><div className="section-heading"><div><div className="eyebrow">Recently added</div><h2 className="serif">New to this room</h2></div><span className="section-caption">YouTube · fresh releases</span></div><TrackSection result={latest} compact /></section>
+    <section className="section-block popular-block"><div className="section-heading"><div><div className="eyebrow">Source activity</div><h2 className="serif">Most downloaded</h2></div><span className="section-caption">YouTube · top global charts</span></div><TrackSection result={popular} compact /></section>
     <section className="section-block"><div className="section-heading"><div><div className="eyebrow">A thread from your listening</div><h2 className="serif">For your listening</h2></div>{recommendationQuery && <span className="section-caption">Inspired by {recommendationSeed?.artist}</span>}</div>
       {recommendationQuery
         ? <TrackSection result={{ ...recommendation, tracks: recommendationTracks }} compact />
-        : <Status kind="empty" title="Your first listen will shape this space." detail="Play or favorite a recording, and we'll look for similar open music using its artist or available genre tags." />}
+        : <Status kind="empty" title="Your first listen will shape this space." detail="Play or favorite a recording, and we'll look for similar music using its artist or genre." />}
     </section>
     <section className="section-block"><div className="section-heading"><div><div className="eyebrow">Your listening trail</div><h2 className="serif">Recently played</h2></div><Link href="/library" className="section-link" data-testid="link-history">Your library <span>↗</span></Link></div>
       {recent.length ? <TrackGrid tracks={recent.slice(0, 6)} /> : <div className="recent-empty"><Clock3 size={19} /><span>Tracks you play will find their way here.</span></div>}
     </section>
-    <footer className="site-footer"><span>OPEN MUSIC <span>·</span> LISTEN WITH CARE</span><span>Publicly shared sounds, credited at the source.</span></footer>
+    <footer className="site-footer"><span>OPEN MUSIC <span>·</span> YOUTUBE STREAMING</span><span>Stream freely with local playlists and queue.</span></footer>
   </div>;
 }
 
@@ -439,7 +634,6 @@ function TrackCard({ track, compact = false }: { track: Track; compact?: boolean
     </div>
     <div className="track-info"><div className="track-title-line"><button onClick={() => music.playTrack(track, [track, ...music.queue.filter((item) => item.id !== track.id)])} className="track-title" title={track.title} data-testid={`title-track-${track.id}`}>{track.title}</button><button className={`inline-like ${liked ? 'liked' : ''}`} onClick={() => music.toggleFavorite(track)} aria-label={liked ? 'Remove favorite' : 'Add favorite'} data-testid={`favorite-track-${track.id}`}><Heart size={15} fill={liked ? 'currentColor' : 'none'} /></button></div>
       <div className="track-artist">{track.artist}{track.year ? ` · ${track.year}` : ''}</div>
-      <div className="license-row"><a href={track.sourceUrl} target="_blank" rel="noreferrer" data-testid={`source-track-${track.id}`}>{track.source}<ExternalLink size={10} /></a><span className="license-dot">·</span><a href={track.licenseUrl} target="_blank" rel="noreferrer" data-testid={`license-track-${track.id}`}>{track.licenseName}</a></div>
       <div className="track-actions">
         <button className="small-action" onClick={() => music.addQueue(track)} data-testid={`queue-track-${track.id}`}><ListPlus size={14} /> Queue</button>
         <button className="small-action" onClick={() => setMenu((value) => !value)} data-testid={`playlist-add-track-${track.id}`}><Plus size={14} /> Playlist</button>
@@ -458,19 +652,19 @@ function SearchPage() {
   const result = useSourceTracks(query, filters);
   const [showFilters, setShowFilters] = useState(false);
   return <div className="page-wrap">
-    <Header eyebrow="Find your frequency" title="Search the open catalog" subtitle="Search across verified public-domain and Creative Commons recordings." />
-    <div className="search-tools"><label className="search-field"><Search size={19} /><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Try an artist, title, or sound…" aria-label="Search music" data-testid="input-search" /><kbd>ENTER</kbd>{draft && <button onClick={() => setDraft('')} aria-label="Clear search" data-testid="button-clear-search"><X size={16} /></button>}</label><button className={`filter-toggle ${showFilters ? 'selected' : ''}`} onClick={() => setShowFilters((value) => !value)} data-testid="button-filters"><SlidersHorizontal size={16} /> Filters</button></div>
+    <Header eyebrow="Find your song" title="Search all music on YouTube" subtitle="Search and play any song, artist, album, or track." />
+    <div className="search-tools"><label className="search-field"><Search size={19} /><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Try an artist, song title, lyrics, or album…" aria-label="Search music" data-testid="input-search" /><kbd>ENTER</kbd>{draft && <button onClick={() => setDraft('')} aria-label="Clear search" data-testid="button-clear-search"><X size={16} /></button>}</label><button className={`filter-toggle ${showFilters ? 'selected' : ''}`} onClick={() => setShowFilters((value) => !value)} data-testid="button-filters"><SlidersHorizontal size={16} /> Filters</button></div>
     {showFilters && <div className="filter-panel" data-testid="search-filters">
-      <FilterInput label="Language" value={filters.language} onChange={(value) => setFilters({ ...filters, language: value })} placeholder="e.g. Bengali, Urdu" />
-      <FilterInput label="Artist / creator" value={filters.artist} onChange={(value) => setFilters({ ...filters, artist: value })} placeholder="Creator name" />
-      <FilterInput label="Album / title" value={filters.album} onChange={(value) => setFilters({ ...filters, album: value })} placeholder="Album or record" />
-      <FilterInput label="Genre / subject" value={filters.genre} onChange={(value) => setFilters({ ...filters, genre: value })} placeholder="e.g. folk, raga" />
-      <label className="filter-field"><span>Source</span><select value={filters.source} onChange={(event) => setFilters({ ...filters, source: event.target.value })} data-testid="select-source"><option value="">All authorized sources</option><option value="Internet Archive">Internet Archive</option><option value="Openverse">Openverse</option></select></label>
+      <FilterInput label="Language" value={filters.language} onChange={(value) => setFilters({ ...filters, language: value })} placeholder="e.g. Hindi, English, Spanish" />
+      <FilterInput label="Artist / creator" value={filters.artist} onChange={(value) => setFilters({ ...filters, artist: value })} placeholder="Creator or singer name" />
+      <FilterInput label="Album / title" value={filters.album} onChange={(value) => setFilters({ ...filters, album: value })} placeholder="Album or single" />
+      <FilterInput label="Genre / mood" value={filters.genre} onChange={(value) => setFilters({ ...filters, genre: value })} placeholder="e.g. pop, rock, chill, edm" />
+      <label className="filter-field"><span>Source</span><select value={filters.source} onChange={(event) => setFilters({ ...filters, source: event.target.value })} data-testid="select-source"><option value="">All YouTube songs</option><option value="YouTube">YouTube</option><option value="Internet Archive">Internet Archive</option><option value="Openverse">Openverse</option></select></label>
       <button className="reset-filters" onClick={() => setFilters(emptyFilters)} data-testid="button-reset-filters">Clear all</button>
     </div>}
-    <div className="results-intro"><span>{query ? `Matching “${query}”` : 'Browse eligible recordings'}</span><span className="mono">AUTHORIZED SOURCES · CC / PUBLIC DOMAIN</span></div>
+    <div className="results-intro"><span>{query ? `Matching “${query}”` : 'Browse music on YouTube'}</span><span className="mono">YOUTUBE MUSIC STREAMING</span></div>
     <TrackSection result={result} />
-    <p className="source-footnote">Searches Internet Archive and Openverse. Results appear only when a direct audio file, an explicit eligible license, and a source record are available. NonCommercial licenses are excluded.</p>
+    <p className="source-footnote">Search and stream any song, artist, album, or music video across YouTube and open archives.</p>
   </div>;
 }
 
@@ -551,8 +745,8 @@ function TrackListRow({ track, index, onPlay, onRemove }: { track: Track; index:
     <button className="row-index" onClick={onPlay} aria-label={`Play ${track.title}`} data-testid={`row-play-${track.id}`}>{music.current?.id === track.id && music.playing ? <AudioLines size={15} /> : String(index + 1).padStart(2, '0')}</button>
     <div className="row-cover"><img src={track.artworkUrl} alt="" onError={(event) => { event.currentTarget.style.visibility = 'hidden'; }} /><Music2 size={16} /></div>
     <div className="row-meta"><button onClick={onPlay} className="row-title" data-testid={`row-title-${track.id}`}>{track.title}</button><span>{track.artist}</span></div>
-    <a className="row-source" href={track.sourceUrl} target="_blank" rel="noreferrer" data-testid={`row-source-${track.id}`}>{track.source} <ExternalLink size={11} /></a>
-    <span className="row-license">{track.licenseName}</span>
+    <span className="row-source">{track.duration ? formatTime(track.duration) : ''}</span>
+    <span className="row-license">{track.album || ''}</span>
     {onRemove && <button className="row-remove" onClick={onRemove} aria-label="Remove from playlist" data-testid={`remove-track-${track.id}`}><X size={16} /></button>}
   </div>;
 }
@@ -587,8 +781,7 @@ function ExpandedPlayer({ onClose }: { onClose: () => void }) {
   const progress = music.duration ? (music.currentTime / music.duration) * 100 : 0;
   return <div className="expanded-overlay" data-testid="expanded-player"><button className="expanded-close" onClick={onClose} aria-label="Close expanded player"><ChevronDown size={20} /></button><div className="expanded-content">
     <div className="expanded-record">{track && <img src={track.artworkUrl} alt="" onError={(event) => { event.currentTarget.style.visibility = 'hidden'; }} />}<Disc3 className="expanded-disc" size={125} strokeWidth={.65} /></div>
-    <div className="eyebrow">OPEN MUSIC · NOW PLAYING</div><h2 className="serif">{track?.title || 'A listening room awaits'}</h2><p className="expanded-artist">{track?.artist || 'Choose a recording from the catalog'}</p>
-    {track && <div className="expanded-credit"><a href={track.sourceUrl} target="_blank" rel="noreferrer">{track.source} record <ExternalLink size={12} /></a><span>{track.attribution}</span><a href={track.licenseUrl} target="_blank" rel="noreferrer">{track.licenseName} <ExternalLink size={12} /></a></div>}
+    {track && <div className="expanded-credit"><a href={track.sourceUrl} target="_blank" rel="noreferrer">Open on YouTube <ExternalLink size={12} /></a></div>}
     <div className="expanded-seek"><input type="range" min="0" max={music.duration || 100} value={music.duration ? music.currentTime : 0} onChange={(event) => music.seek(Number(event.target.value))} aria-label="Seek playback" style={{ '--progress': `${progress}%` } as CSSProperties} /><div><span>{formatTime(music.currentTime)}</span><span>{formatTime(music.duration)}</span></div></div>
     <div className="expanded-controls"><button className={`player-control ${music.shuffle ? 'control-on' : ''}`} onClick={music.toggleShuffle} aria-label="Toggle shuffle"><Shuffle size={19} /></button><button className="player-control" onClick={music.previous} aria-label="Previous"><SkipBack size={22} fill="currentColor" /></button><button className="expanded-play" onClick={music.togglePlay} aria-label={music.playing ? 'Pause' : 'Play'}>{music.playing ? <Pause size={25} fill="currentColor" /> : <Play size={25} fill="currentColor" />}</button><button className="player-control" onClick={music.next} aria-label="Next"><SkipForward size={22} fill="currentColor" /></button><button className={`player-control ${music.repeat !== 'off' ? 'control-on' : ''}`} onClick={music.toggleRepeat} aria-label="Repeat"><Repeat size={19} /></button></div>
     <div className="expanded-volume"><button className="player-control" onClick={music.toggleMute} aria-label={music.muted ? 'Unmute' : 'Mute'} data-testid="expanded-button-mute">{music.muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button><input type="range" min="0" max="1" step=".01" value={music.muted ? 0 : music.volume} onChange={(event) => music.setVolume(Number(event.target.value))} aria-label="Volume" data-testid="expanded-input-volume" /></div>

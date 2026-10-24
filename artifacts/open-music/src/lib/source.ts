@@ -235,9 +235,107 @@ export async function searchOpenverse(query: string, signal?: AbortSignal, page 
   return result;
 }
 
+const youtubeCache = new Map<string, CacheEntry>();
+
+export async function searchYouTubeTracks(
+  query: string,
+  filters: SearchFilters,
+  signal?: AbortSignal,
+  page = 1
+): Promise<SearchPage> {
+  const parts = [query, filters.artist, filters.album, filters.genre, filters.language].map((s) => s?.trim()).filter(Boolean);
+  let searchText = parts.join(' ');
+  if (!searchText) {
+    if (filters.sort?.includes('downloads')) {
+      searchText = 'top music hits global';
+    } else if (filters.sort?.includes('date')) {
+      searchText = 'new music hits this week';
+    } else if (filters.language) {
+      searchText = `${filters.language} top songs`;
+    } else if (filters.genre) {
+      searchText = `${filters.genre} music hits`;
+    } else {
+      searchText = 'trending music hits';
+    }
+  }
+
+  const cacheKey = `${searchText.toLowerCase()}|${page}`;
+  const cached = youtubeCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < CACHE_TTL) return cached.result;
+
+  const params = new URLSearchParams({ q: searchText });
+  const response = await fetch(`/api/youtube/search?${params}`, { signal });
+  if (!response.ok) {
+    throw new Error(`YouTube search returned ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as {
+    items?: Array<{
+      id: string;
+      title: string;
+      channel: string;
+      description: string;
+      thumbnailUrl: string;
+      sourceUrl: string;
+      duration?: number;
+      durationText?: string;
+    }>;
+    nextPageToken?: string;
+  };
+
+  const tracks: Track[] = (payload.items || []).map((video) => {
+    const title = clean(video.title || 'Untitled song');
+    const artist = clean(video.channel || 'YouTube Artist');
+    const sourceUrl = video.sourceUrl || `https://www.youtube.com/watch?v=${encodeURIComponent(video.id)}`;
+    return {
+      id: `yt:${video.id}`,
+      providerId: video.id,
+      source: 'YouTube',
+      title,
+      artist,
+      album: 'YouTube',
+      year: '',
+      language: filters.language || '',
+      genre: filters.genre || 'Music',
+      artworkUrl: video.thumbnailUrl,
+      audioUrl: sourceUrl,
+      licenseName: '',
+      licenseUrl: '',
+      sourceUrl,
+      attribution: `${title} by ${artist}`,
+      duration: video.duration || 0,
+    };
+  });
+
+  const result: SearchPage = {
+    tracks,
+    hasMore: Boolean(payload.nextPageToken) || tracks.length >= 10,
+  };
+  cacheResult(youtubeCache, cacheKey, result);
+  return result;
+}
+
 export async function searchMusic(query: string, filters: SearchFilters, signal?: AbortSignal, page = 1): Promise<SearchPage> {
-  const providers = filters.source === 'Internet Archive' ? ['archive'] :
-    filters.source === 'Openverse' ? ['openverse'] : ['archive', 'openverse'];
+  if (filters.source === 'Internet Archive') {
+    return searchArchive(query, filters, signal, page);
+  }
+  if (filters.source === 'Openverse') {
+    const openverseQuery = [query, filters.artist, filters.album, filters.genre, filters.language].filter(Boolean).join(' ');
+    return searchOpenverse(openverseQuery, signal, page);
+  }
+
+  // Default: Search YouTube first
+  try {
+    const ytResult = await searchYouTubeTracks(query, filters, signal, page);
+    if (ytResult.tracks.length > 0) {
+      return ytResult;
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // If YouTube search fails, fall back to Archive/Openverse
+  }
+
+  const providers = ['archive', 'openverse'];
   const openverseQuery = [
     query, filters.artist, filters.album, filters.genre, filters.language.split(',')[0],
   ].filter(Boolean).join(' ');
@@ -259,12 +357,8 @@ export async function searchMusic(query: string, filters: SearchFilters, signal?
     return languageMatch && artistMatch && albumMatch && genreMatch;
   });
   const ordered = filtered.slice(0, PAGE_SIZE * providers.length);
-  if (outcomes.some((result) => result.status === 'rejected')) {
-    const failures = outcomes.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    const message = failures.map((failure) => failure.reason instanceof Error ? failure.reason.message : 'A provider could not be reached.').join(' ');
-    throw new SearchProviderError(`${message} Showing available results only.`, ordered, hasMore);
-  }
   return { tracks: ordered, hasMore };
 }
 
 export const emptyFilters: SearchFilters = { language: '', artist: '', album: '', genre: '', source: '' };
+

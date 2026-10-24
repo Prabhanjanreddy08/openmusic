@@ -237,6 +237,15 @@ export async function searchOpenverse(query: string, signal?: AbortSignal, page 
 
 const youtubeCache = new Map<string, CacheEntry>();
 
+function getApiBaseUrl(): string {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl) return envUrl.replace(/\/$/, '');
+  if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+    return 'https://openmusic-jnp8.onrender.com';
+  }
+  return '';
+}
+
 export async function searchYouTubeTracks(
   query: string,
   filters: SearchFilters,
@@ -264,7 +273,8 @@ export async function searchYouTubeTracks(
   if (cached && Date.now() - cached.at < CACHE_TTL) return cached.result;
 
   const params = new URLSearchParams({ q: searchText });
-  const response = await fetch(`/api/youtube/search?${params}`, { signal });
+  const apiBase = getApiBaseUrl();
+  const response = await fetch(`${apiBase}/api/youtube/search?${params}`, { signal });
   if (!response.ok) {
     throw new Error(`YouTube search returned ${response.status}.`);
   }

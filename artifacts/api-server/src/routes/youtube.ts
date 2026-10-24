@@ -1,13 +1,13 @@
 import { Router, type IRouter } from "express";
-import { ErrorResponse, SearchYouTubeQueryParams, SearchYouTubeResponse } from "@workspace/api-zod";
+import { type ErrorResponse, SearchYouTubeQueryParams, SearchYouTubeResponse } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 const CACHE_TTL = 5 * 60_000;
 const CACHE_LIMIT = 120;
 const responseCache = new Map<string, { createdAt: number; data: ReturnType<typeof SearchYouTubeResponse.parse> }>();
 
-function errorBody(error: string) {
-  return ErrorResponse.parse({ error });
+function errorBody(error: string): ErrorResponse {
+  return { error };
 }
 
 router.get("/youtube/search", async (req, res): Promise<void> => {

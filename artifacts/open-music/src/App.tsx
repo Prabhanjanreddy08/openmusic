@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, createContext, useContext, type ReactNode, type FormEvent, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, createContext, useContext, type ReactNode, type FormEvent, type CSSProperties, type RefObject } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -57,9 +57,11 @@ type MusicContextType = LocalState & {
   cacheTracks: (tracks: Track[]) => void;
   audio: HTMLAudioElement | null;
   setAudio: (audio: HTMLAudioElement) => void;
+  silentAudioRef: RefObject<HTMLAudioElement | null>;
 };
 const MusicContext = createContext<MusicContextType | null>(null);
 const STORAGE_KEY = 'open-music-state-v1';
+const SILENT_AUDIO_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 const DEFAULT_STATE: LocalState = { favorites: [], playlists: [], recent: [], queue: [], theme: 'dark', volume: 0.72, muted: false, shuffle: false, repeat: 'off', tracks: {} };
 const queryClient = new QueryClient();
 
@@ -80,10 +82,11 @@ function MusicProvider({ children }: { children: ReactNode }) {
   const muted = local.muted;
   const [expanded, setExpanded] = useState(false);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
+  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
   const ytPlayerRef = useRef<any>(null);
   const pendingVideoRef = useRef<string | null>(null);
-  const latest = useRef({ local, current });
-  latest.current = { local, current };
+  const latest = useRef({ local, current, playing });
+  latest.current = { local, current, playing };
 
   const patch = useCallback((update: Partial<LocalState> | ((old: LocalState) => Partial<LocalState>)) => {
     setLocal((old) => ({ ...old, ...(typeof update === 'function' ? update(old) : update) }));
@@ -255,6 +258,9 @@ function MusicProvider({ children }: { children: ReactNode }) {
     setPlaybackError('');
 
     const isYT = track.source === 'YouTube' || track.id.startsWith('yt:');
+    if (silentAudioRef.current) {
+      silentAudioRef.current.play().catch(() => {});
+    }
     if (isYT) {
       if (audio) {
         audio.pause();
@@ -334,6 +340,13 @@ function MusicProvider({ children }: { children: ReactNode }) {
       return;
     }
     const isYT = current.source === 'YouTube' || current.id.startsWith('yt:');
+    if (silentAudioRef.current) {
+      if (playing) {
+        silentAudioRef.current.pause();
+      } else {
+        silentAudioRef.current.play().catch(() => {});
+      }
+    }
     if (isYT && ytPlayerRef.current) {
       if (playing) {
         ytPlayerRef.current.pauseVideo();
@@ -408,10 +421,107 @@ function MusicProvider({ children }: { children: ReactNode }) {
   const updateTheme = useCallback(() => patch((old) => ({ theme: old.theme === 'dark' ? 'light' : 'dark' })), [patch]);
   const clearPlaybackError = useCallback(() => setPlaybackError(''), []);
 
+  // Mobile Background Audio Keepalive
+  useEffect(() => {
+    if (!silentAudioRef.current) return;
+    if (playing) {
+      silentAudioRef.current.play().catch(() => {});
+    } else {
+      silentAudioRef.current.pause();
+    }
+  }, [playing]);
+
+  // MediaSession API Integration for Phone Lock Screen & Notification Controls
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !current) return;
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: current.title,
+        artist: current.artist,
+        album: current.album || 'Open Music',
+        artwork: [
+          { src: current.artworkUrl || '/icon.png', sizes: '512x512', type: 'image/png' },
+          { src: current.artworkUrl || '/icon.png', sizes: '256x256', type: 'image/png' },
+          { src: current.artworkUrl || '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+          { src: current.artworkUrl || '/favicon.png', sizes: '96x96', type: 'image/png' },
+        ],
+      });
+
+      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+    } catch {}
+  }, [current, playing]);
+
+  // MediaSession Action Handlers (Bluetooth, Earbuds, Lock Screen buttons)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    const actionHandlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ['play', () => togglePlay()],
+      ['pause', () => togglePlay()],
+      ['previoustrack', () => previous()],
+      ['nexttrack', () => next()],
+      ['seekto', (details) => { if (typeof details.seekTime === 'number') seek(details.seekTime); }],
+      ['seekbackward', (details) => { seek(Math.max(currentTime - (details.seekOffset || 10), 0)); }],
+      ['seekforward', (details) => { seek(Math.min(currentTime + (details.seekOffset || 10), duration)); }],
+      ['stop', () => togglePlay()],
+    ];
+
+    actionHandlers.forEach(([action, handler]) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {}
+    });
+
+    return () => {
+      actionHandlers.forEach(([action]) => {
+        try {
+          navigator.mediaSession.setActionHandler(action, null);
+        } catch {}
+      });
+    };
+  }, [togglePlay, previous, next, seek, currentTime, duration]);
+
+  // Update MediaSession Position State
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !('setPositionState' in navigator.mediaSession)) return;
+    if (duration > 0 && Number.isFinite(duration) && Number.isFinite(currentTime)) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: Math.max(duration, 0),
+          playbackRate: 1,
+          position: Math.min(Math.max(currentTime, 0), duration),
+        });
+      } catch {}
+    }
+  }, [currentTime, duration]);
+
+  // Mobile App Switch / Background Visibility Guard
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden' && latest.current.playing) {
+        if (silentAudioRef.current && silentAudioRef.current.paused) {
+          silentAudioRef.current.play().catch(() => {});
+        }
+        if (ytPlayerRef.current?.playVideo) {
+          try {
+            ytPlayerRef.current.playVideo();
+          } catch {}
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handleVisibility);
+    };
+  }, []);
+
   const value: MusicContextType = {
     ...local, current, playing, playbackError, currentTime, duration, muted, expanded, setExpanded, playTrack, togglePlay, next, previous,
     seek, setVolume, toggleMute, toggleShuffle, toggleRepeat, toggleFavorite, addQueue, removeQueue, reorderQueue, createPlaylist, updatePlaylist,
-    deletePlaylist, addToPlaylist, updateTheme, clearPlaybackError, cacheTracks, audio, setAudio,
+    deletePlaylist, addToPlaylist, updateTheme, clearPlaybackError, cacheTracks, audio, setAudio, silentAudioRef,
   };
   return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;
 }
@@ -448,10 +558,11 @@ function AppShell() {
     return () => window.removeEventListener('keydown', shortcut);
   }, [music.togglePlay, music.next, music.previous, music.toggleMute, music.seek, music.duration, music.currentTime]);
   return <div className="shell grain">
-    <div style={{ position: 'fixed', bottom: -300, left: -300, width: 150, height: 150, opacity: 0.001, pointerEvents: 'none', zIndex: -9999 }}>
+    <div style={{ position: 'fixed', top: 0, left: 0, width: 200, height: 200, opacity: 0.001, pointerEvents: 'none', zIndex: -9999, transform: 'translate3d(0, 0, 0)' }}>
       <div id="youtube-player-element" />
     </div>
     <audio ref={(node) => { if (node && music.audio !== node) music.setAudio(node); }} preload="metadata" data-testid="audio-element" />
+    <audio ref={music.silentAudioRef} src={SILENT_AUDIO_URI} loop preload="auto" />
     <aside className="sidebar">
       <Link href="/" className="brand" data-testid="link-brand"><span className="brand-mark"><AudioLines size={20} /></span><span>open<span className="brand-light">music</span></span></Link>
       <div className="side-caption">YOUR SPACE</div>

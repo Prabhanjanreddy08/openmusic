@@ -240,10 +240,13 @@ const youtubeCache = new Map<string, CacheEntry>();
 export function getApiBaseUrl(): string {
   const envUrl = import.meta.env.VITE_API_URL;
   if (envUrl) return envUrl.replace(/\/$/, '');
-  if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+  if (typeof window !== 'undefined') {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return '';
+    }
     return 'https://openmusic-jnp8.onrender.com';
   }
-  return '';
+  return 'https://openmusic-jnp8.onrender.com';
 }
 
 export async function searchYouTubeTracks(

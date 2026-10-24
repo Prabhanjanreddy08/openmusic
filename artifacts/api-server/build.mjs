@@ -118,6 +118,23 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  // Bundle the ytdl solver worker as a self-contained worker in dist/worker.js
+  try {
+    const ytdlPkg = require.resolve("@distube/ytdl-core/package.json");
+    const workerSrc = path.resolve(path.dirname(ytdlPkg), "dist/solver/worker.js");
+    await esbuild({
+      entryPoints: { worker: workerSrc },
+      platform: "node",
+      bundle: true,
+      format: "esm",
+      outdir: distDir,
+      outExtension: { ".js": ".js" },
+      logLevel: "info",
+    });
+  } catch (err) {
+    console.warn("Could not bundle ytdl worker:", err);
+  }
 }
 
 buildAll().catch((err) => {

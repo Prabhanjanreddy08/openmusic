@@ -57,11 +57,9 @@ type MusicContextType = LocalState & {
   cacheTracks: (tracks: Track[]) => void;
   audio: HTMLAudioElement | null;
   setAudio: (audio: HTMLAudioElement) => void;
-  silentAudioRef: RefObject<HTMLAudioElement | null>;
 };
 const MusicContext = createContext<MusicContextType | null>(null);
 const STORAGE_KEY = 'open-music-state-v1';
-const SILENT_AUDIO_URI = '/silence.wav';
 const DEFAULT_STATE: LocalState = { favorites: [], playlists: [], recent: [], queue: [], theme: 'dark', volume: 0.72, muted: false, shuffle: false, repeat: 'off', tracks: {} };
 const queryClient = new QueryClient();
 
@@ -82,7 +80,6 @@ function MusicProvider({ children }: { children: ReactNode }) {
   const muted = local.muted;
   const [expanded, setExpanded] = useState(false);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
-  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
   const userPausedRef = useRef(false);
   const ytPlayerRef = useRef<any>(null);
   const pendingVideoRef = useRef<string | null>(null);
@@ -164,10 +161,6 @@ function MusicProvider({ children }: { children: ReactNode }) {
                 setPlaying(false);
               } else {
                 // Background/lock-screen auto-pause triggered by mobile browser!
-                // Keep playing and resume audio immediately like Spotify!
-                if (silentAudioRef.current && silentAudioRef.current.paused) {
-                  silentAudioRef.current.play().catch(() => {});
-                }
                 setTimeout(() => {
                   if (!userPausedRef.current && ytPlayerRef.current?.playVideo) {
                     try {
@@ -302,10 +295,6 @@ function MusicProvider({ children }: { children: ReactNode }) {
           : `${apiBase}/api/youtube/stream?id=${encodeURIComponent(videoId)}`)
       : track.audioUrl;
 
-    if (silentAudioRef.current && silentAudioRef.current.paused) {
-      silentAudioRef.current.play().catch(() => {});
-    }
-
     if (audio) {
       if (ytPlayerRef.current?.pauseVideo) {
         try { ytPlayerRef.current.pauseVideo(); } catch {}
@@ -387,7 +376,6 @@ function MusicProvider({ children }: { children: ReactNode }) {
     const isYT = current.source === 'YouTube' || current.id.startsWith('yt:');
     if (playing) {
       userPausedRef.current = true;
-      if (silentAudioRef.current) silentAudioRef.current.pause();
       if (audio) audio.pause();
       if (isYT && ytPlayerRef.current?.pauseVideo) {
         try { ytPlayerRef.current.pauseVideo(); } catch {}
@@ -395,7 +383,6 @@ function MusicProvider({ children }: { children: ReactNode }) {
       setPlaying(false);
     } else {
       userPausedRef.current = false;
-      if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
       if (audio && audio.src) {
         void audio.play().then(() => setPlaying(true)).catch(() => {
           if (isYT && ytPlayerRef.current?.playVideo) {
@@ -469,15 +456,8 @@ function MusicProvider({ children }: { children: ReactNode }) {
   const updateTheme = useCallback(() => patch((old) => ({ theme: old.theme === 'dark' ? 'light' : 'dark' })), [patch]);
   const clearPlaybackError = useCallback(() => setPlaybackError(''), []);
 
-  // Mobile Background Audio Keepalive
-  useEffect(() => {
-    if (!silentAudioRef.current) return;
-    if (playing) {
-      silentAudioRef.current.play().catch(() => {});
-    } else {
-      silentAudioRef.current.pause();
-    }
-  }, [playing]);
+  const playbackRef = useRef({ currentTime, duration, seek, audio });
+  playbackRef.current = { currentTime, duration, seek, audio };
 
   // MediaSession API Integration for Phone Lock Screen & Notification Controls
   useEffect(() => {
@@ -497,16 +477,8 @@ function MusicProvider({ children }: { children: ReactNode }) {
       });
 
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-
-      if ('setPositionState' in navigator.mediaSession && Number.isFinite(duration) && duration > 0) {
-        navigator.mediaSession.setPositionState({
-          duration: Math.max(duration, 0),
-          playbackRate: 1,
-          position: Math.max(0, Math.min(currentTime, duration)),
-        });
-      }
     } catch {}
-  }, [current, playing, currentTime, duration]);
+  }, [current, playing]);
 
   // MediaSession Action Handlers (Bluetooth, Earbuds, Lock Screen buttons)
   useEffect(() => {
@@ -515,28 +487,34 @@ function MusicProvider({ children }: { children: ReactNode }) {
     const actionHandlers: [MediaSessionAction, MediaSessionActionHandler][] = [
       ['play', () => {
         userPausedRef.current = false;
-        if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
+        const currentAudio = playbackRef.current.audio;
+        if (currentAudio && currentAudio.paused) void currentAudio.play().catch(() => {});
         if (ytPlayerRef.current?.playVideo) ytPlayerRef.current.playVideo();
-        if (audio && audio.paused) void audio.play().catch(() => {});
         setPlaying(true);
       }],
       ['pause', () => {
         userPausedRef.current = true;
-        if (silentAudioRef.current) silentAudioRef.current.pause();
+        const currentAudio = playbackRef.current.audio;
+        if (currentAudio && !currentAudio.paused) currentAudio.pause();
         if (ytPlayerRef.current?.pauseVideo) ytPlayerRef.current.pauseVideo();
-        if (audio && !audio.paused) audio.pause();
         setPlaying(false);
       }],
       ['previoustrack', () => { userPausedRef.current = false; previous(); }],
       ['nexttrack', () => { userPausedRef.current = false; next(); }],
-      ['seekto', (details) => { if (typeof details.seekTime === 'number') seek(details.seekTime); }],
-      ['seekbackward', (details) => { seek(Math.max(currentTime - (details.seekOffset || 10), 0)); }],
-      ['seekforward', (details) => { seek(Math.min(currentTime + (details.seekOffset || 10), duration)); }],
+      ['seekto', (details) => { if (typeof details.seekTime === 'number') playbackRef.current.seek(details.seekTime); }],
+      ['seekbackward', (details) => {
+        const { currentTime: cur, seek: doSeek } = playbackRef.current;
+        doSeek(Math.max(cur - (details.seekOffset || 10), 0));
+      }],
+      ['seekforward', (details) => {
+        const { currentTime: cur, duration: dur, seek: doSeek } = playbackRef.current;
+        doSeek(Math.min(cur + (details.seekOffset || 10), dur));
+      }],
       ['stop', () => {
         userPausedRef.current = true;
-        if (silentAudioRef.current) silentAudioRef.current.pause();
+        const currentAudio = playbackRef.current.audio;
+        if (currentAudio) currentAudio.pause();
         if (ytPlayerRef.current?.pauseVideo) ytPlayerRef.current.pauseVideo();
-        if (audio) audio.pause();
         setPlaying(false);
       }],
     ];
@@ -554,7 +532,7 @@ function MusicProvider({ children }: { children: ReactNode }) {
         } catch {}
       });
     };
-  }, [togglePlay, previous, next, seek, currentTime, duration]);
+  }, [previous, next]);
 
   // Update MediaSession Position State
   useEffect(() => {
@@ -570,34 +548,10 @@ function MusicProvider({ children }: { children: ReactNode }) {
     }
   }, [currentTime, duration]);
 
-  // Mobile App Switch / Background Visibility Guard
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === 'hidden' && !userPausedRef.current && latest.current.current) {
-        if (silentAudioRef.current && silentAudioRef.current.paused) {
-          silentAudioRef.current.play().catch(() => {});
-        }
-        setTimeout(() => {
-          if (!userPausedRef.current && ytPlayerRef.current?.playVideo) {
-            try {
-              ytPlayerRef.current.playVideo();
-            } catch {}
-          }
-        }, 80);
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('pagehide', handleVisibility);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('pagehide', handleVisibility);
-    };
-  }, []);
-
   const value: MusicContextType = {
     ...local, current, playing, playbackError, currentTime, duration, muted, expanded, setExpanded, playTrack, togglePlay, next, previous,
     seek, setVolume, toggleMute, toggleShuffle, toggleRepeat, toggleFavorite, addQueue, removeQueue, reorderQueue, createPlaylist, updatePlaylist,
-    deletePlaylist, addToPlaylist, updateTheme, clearPlaybackError, cacheTracks, audio, setAudio, silentAudioRef,
+    deletePlaylist, addToPlaylist, updateTheme, clearPlaybackError, cacheTracks, audio, setAudio,
   };
   return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;
 }
@@ -638,7 +592,6 @@ function AppShell() {
       <div id="youtube-player-element" />
     </div>
     <audio ref={(node) => { if (node && music.audio !== node) music.setAudio(node); }} preload="auto" playsInline data-testid="audio-element" />
-    <audio ref={music.silentAudioRef} src={SILENT_AUDIO_URI} loop preload="auto" playsInline />
     <aside className="sidebar">
       <Link href="/" className="brand" data-testid="link-brand"><span className="brand-mark"><AudioLines size={20} /></span><span>open<span className="brand-light">music</span></span></Link>
       <div className="side-caption">YOUR SPACE</div>
